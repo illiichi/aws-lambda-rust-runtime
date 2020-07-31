@@ -25,16 +25,17 @@ use crate::{
 #[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct LambdaRequest<'a> {
+    #[serde(default)]
     pub(crate) path: Cow<'a, str>,
-    #[serde(deserialize_with = "deserialize_method")]
+    #[serde(default, deserialize_with = "deserialize_method")]
     pub(crate) http_method: Method,
-    #[serde(deserialize_with = "deserialize_headers")]
+    #[serde(default, deserialize_with = "deserialize_headers")]
     pub(crate) headers: HeaderMap<HeaderValue>,
     /// For alb events these are only present when
     /// the `lambda.multi_value_headers.enabled` target group setting turned on
     #[serde(default, deserialize_with = "deserialize_multi_value_headers")]
     pub(crate) multi_value_headers: HeaderMap<HeaderValue>,
-    #[serde(deserialize_with = "nullable_default")]
+    #[serde(default, deserialize_with = "nullable_default")]
     pub(crate) query_string_parameters: StrMap,
     /// For alb events these are only present when
     /// the `lambda.multi_value_headers.enabled` target group setting turned on
@@ -193,7 +194,7 @@ where
         }
     }
 
-    deserializer.deserialize_map(HeaderVisitor)
+    deserializer.deserialize_any(HeaderVisitor).or_else(|_| {Ok(HeaderMap::new())})
 }
 
 /// Deserialize a map of Cow<'_, str> => Cow<'_, str> into an http::HeaderMap
@@ -227,7 +228,7 @@ where
         }
     }
 
-    deserializer.deserialize_map(HeaderVisitor)
+    deserializer.deserialize_any(HeaderVisitor).or_else(|_| {Ok(HeaderMap::new())})
 }
 
 /// deserializes (json) null values to their default values
@@ -269,8 +270,8 @@ impl<'a> From<LambdaRequest<'a>> for HttpRequest<Body> {
                     .unwrap_or_else(|| "https"),
                 headers
                     .get(HOST)
-                    .map(|val| val.to_str().unwrap_or_default())
-                    .unwrap_or_default(),
+                    .map(|val| val.to_str().unwrap_or_else(|_| "dummy_host"))
+                    .unwrap_or_else(|| "dummy_host"),
                 path
             )
         });
@@ -381,6 +382,18 @@ mod tests {
             ..LambdaRequest::default()
         };
         let expected = HttpRequest::get("https://www.rust-lang.org/foo").body(()).unwrap();
+        let actual = HttpRequest::from(lambda_request);
+        assert_eq!(expected.method(), actual.method());
+        assert_eq!(expected.uri(), actual.uri());
+        assert_eq!(expected.method(), actual.method());
+    }
+
+    #[test]
+    fn requests_convert_no_host() {
+        let mut headers = HeaderMap::new();
+        let lambda_request: LambdaRequest<'_> = LambdaRequest::default();
+
+        let expected = HttpRequest::get("https://dummy_host/").body(()).unwrap();
         let actual = HttpRequest::from(lambda_request);
         assert_eq!(expected.method(), actual.method());
         assert_eq!(expected.uri(), actual.uri());
